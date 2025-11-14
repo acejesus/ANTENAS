@@ -351,41 +351,58 @@ def separar_antena_soporte(puntos, plano_info, densidad_info,
     distancias = calcular_distancias_al_plano(puntos, plano_info)
 
     if metodo == 'auto' or metodo == 'derivada':
-        # Detectar cambio brusco
+        # Los soportes están del lado OPUESTO a la antena
+        # Si antena está en lado positivo → soportes en lado negativo
+        # Si antena está en lado negativo → soportes en lado positivo
+        lado_soporte = 'negativo' if lado_antena == 'positivo' else 'positivo'
+
+        print(f"    Buscando cambio brusco en lado {lado_soporte} (soportes)")
+
+        # Detectar cambio brusco en el lado donde están los SOPORTES
         cambio_info = detectar_cambio_brusco_densidad(
             densidad_info,
-            lado=lado_antena
+            lado=lado_soporte  # ← Cambiado: buscar en lado de soportes, no de antena
         )
 
         if cambio_info is not None:
             distancia_corte = cambio_info['distancia_corte']
         else:
-            # Fallback: usar un percentil conservador
+            # Fallback: usar un percentil conservador EN EL LADO DE LOS SOPORTES
             if lado_antena == 'positivo':
-                distancia_corte = np.percentile(distancias[distancias > 0], 75)
-            else:
+                # Antena en lado positivo → soportes en lado negativo
+                # Usar percentil 25 de los negativos (los más cercanos al plano)
                 distancia_corte = np.percentile(distancias[distancias < 0], 25)
-            print(f"    ℹ️ Usando corte por percentil: {distancia_corte:.3f} m")
+            else:
+                # Antena en lado negativo → soportes en lado positivo
+                # Usar percentil 75 de los positivos (los más cercanos al plano)
+                distancia_corte = np.percentile(distancias[distancias > 0], 75)
+            print(f"    ℹ️ Usando corte por percentil en lado soportes: {distancia_corte:.3f} m")
 
     elif metodo == 'umbral_fijo':
-        # Usar umbral fijo (ej: 0.15m desde el plano)
-        distancia_corte = 0.15 if lado_antena == 'positivo' else -0.15
-        print(f"    ℹ️ Usando umbral fijo: {distancia_corte:.3f} m")
+        # Usar umbral fijo en el lado de los SOPORTES
+        # Si antena en lado positivo → soportes en negativo → umbral negativo
+        distancia_corte = -0.15 if lado_antena == 'positivo' else 0.15
+        print(f"    ℹ️ Usando umbral fijo en lado soportes: {distancia_corte:.3f} m")
 
     else:
         raise ValueError(f"Método '{metodo}' no reconocido")
 
     # Aplicar corte
-    # El punto de corte detectado marca dónde EMPIEZA el soporte
-    # Por tanto, la antena está desde -infinito hasta el punto de corte
+    # El punto de corte detectado marca dónde TERMINA la antena y EMPIEZA el soporte
+    # Si lado_antena='positivo': antena en lado positivo, soportes en lado negativo
+    #   - distancia_corte es negativa (ej: -0.125m)
+    #   - Soportes: distancias < distancia_corte (ej: < -0.125m, más hacia la torre)
+    #   - Antena: distancias >= distancia_corte (ej: >= -0.125m, incluye todo el lado positivo)
     if lado_antena == 'positivo':
-        # Soporte está en distancias > distancia_corte
-        # Antena está en distancias <= distancia_corte (desde -inf hasta corte)
-        mask_antena = distancias <= abs(distancia_corte)
+        # Antena está en el lado positivo (exterior)
+        # Corte detectado en lado negativo (hacia torre) donde empiezan soportes
+        # Mantener todo lo que está MÁS AFUERA que el corte (distancias >= distancia_corte)
+        mask_antena = distancias >= distancia_corte
     else:
-        # Soporte está en distancias < distancia_corte (negativos más alejados)
-        # Antena está en distancias >= -abs(distancia_corte) (desde corte hasta +inf)
-        mask_antena = distancias >= -abs(distancia_corte)
+        # Antena está en el lado negativo (raro, pero por completitud)
+        # Corte detectado en lado positivo donde empiezan soportes
+        # Mantener todo lo que está MÁS ADENTRO que el corte (distancias <= distancia_corte)
+        mask_antena = distancias <= distancia_corte
 
     puntos_antena = puntos[mask_antena]
     puntos_soporte = puntos[~mask_antena]
@@ -797,17 +814,31 @@ for ejemplar in ejemplares:
         # 4. NUEVO: Separar antena de soporte
         print("\n  [PASO 3] Separación antena/soporte:")
 
-        # Determinar en qué lado está la antena
-        # (asumimos lado positivo por defecto, pero se puede ajustar)
+        # Determinar en qué lado buscar el soporte
+        # El plano PCA tiene normal radial apuntando hacia AFUERA desde la torre
+        # Por tanto:
+        #   - Lado POSITIVO (distancias > 0): exterior, alejándose de la torre → ANTENA
+        #   - Lado NEGATIVO (distancias < 0): interior, hacia la torre → SOPORTES
+
+        # Los soportes están DETRÁS de la antena, hacia la torre (lado negativo)
+        # Así que buscamos el cambio brusco en el lado NEGATIVO
         distancias = calcular_distancias_al_plano(puntos_limpios, plano_info)
-        lado_con_mas_puntos = 'positivo' if np.sum(distancias > 0) > np.sum(distancias < 0) else 'negativo'
-        print(f"    Lado con más puntos: {lado_con_mas_puntos}")
+        n_positivos = np.sum(distancias > 0)
+        n_negativos = np.sum(distancias < 0)
+
+        print(f"    Distribución de puntos:")
+        print(f"    - Lado positivo (exterior): {n_positivos} puntos ({100*n_positivos/len(distancias):.1f}%)")
+        print(f"    - Lado negativo (interior/torre): {n_negativos} puntos ({100*n_negativos/len(distancias):.1f}%)")
+
+        # Buscar soportes en el lado NEGATIVO (hacia la torre)
+        lado_buscar_soporte = 'negativo'
+        print(f"    Buscando soportes en lado: {lado_buscar_soporte}")
 
         separacion_info = separar_antena_soporte(
             puntos_limpios,
             plano_info,
             densidad_info,
-            lado_antena=lado_con_mas_puntos,
+            lado_antena='positivo',  # La antena está en el lado POSITIVO (exterior)
             metodo='auto'
         )
 
