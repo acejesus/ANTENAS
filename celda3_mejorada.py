@@ -868,5 +868,612 @@ print("\n" + "=" * 60)
 print("PROCESAMIENTO COMPLETADO")
 print("=" * 60)
 print(f"\n✓ {len(resultados_ejemplares)} ejemplares procesados")
-print("\nResultados disponibles en: resultados_ejemplares")
-print("\nPara visualizar, usar el código de visualización de la celda 3 original")
+
+
+# ============================================================================
+# VISUALIZACIONES DE DEBUG - NUEVAS (Separación Antena/Soporte)
+# ============================================================================
+
+if APLICAR_SEPARACION:
+    print("\n" + "=" * 60)
+    print("VISUALIZACIONES DE DEBUG - ANÁLISIS ANTENA/SOPORTE")
+    print("=" * 60)
+
+    # Calcular número de filas y columnas para subplots de debug
+    n_ejemplares = len(ejemplares)
+    n_cols_debug = min(3, n_ejemplares)
+    n_rows_debug = int(np.ceil(n_ejemplares / n_cols_debug))
+
+    # ========================================================================
+    # 1. VISUALIZACIÓN DEL PLANO AJUSTADO Y SEPARACIÓN DE PUNTOS
+    # ========================================================================
+
+    fig_plano, axes_plano = plt.subplots(n_rows_debug, n_cols_debug,
+                                         figsize=(7*n_cols_debug, 7*n_rows_debug))
+    if n_ejemplares == 1:
+        axes_plano = np.array([axes_plano])
+    axes_plano = axes_plano.flatten()
+
+    for idx, (ejemplar, datos) in enumerate(resultados_ejemplares.items()):
+        ax = axes_plano[idx]
+
+        if datos['separacion_info'] is None:
+            ax.text(0.5, 0.5, 'Separación no aplicada',
+                   ha='center', va='center', fontsize=14)
+            ax.axis('off')
+            continue
+
+        plano_info = datos['plano_info']
+        separacion_info = datos['separacion_info']
+        puntos_antena = separacion_info['puntos_antena']
+        puntos_soporte = separacion_info['puntos_soporte']
+
+        # Puntos coloreados: verde=antena, rojo=soporte
+        ax.scatter(puntos_antena[:, 0], puntos_antena[:, 1],
+                  c='green', s=40, alpha=0.7, edgecolors='black',
+                  linewidth=0.3, label=f'Antena ({len(puntos_antena)})')
+
+        if len(puntos_soporte) > 0:
+            ax.scatter(puntos_soporte[:, 0], puntos_soporte[:, 1],
+                      c='red', s=40, alpha=0.5, edgecolors='black',
+                      linewidth=0.3, label=f'Soporte ({len(puntos_soporte)})')
+
+        # Dibujar proyección del plano ajustado
+        normal = plano_info['normal']
+        punto_plano = plano_info['punto_en_plano']
+
+        # Crear una cuadrícula para visualizar el plano
+        all_pts = datos['puntos_limpios']
+        x_range = [all_pts[:, 0].min(), all_pts[:, 0].max()]
+        y_range = [all_pts[:, 1].min(), all_pts[:, 1].max()]
+
+        # Dibujar línea de intersección del plano con Z=promedio
+        # El plano es: normal·(P - punto_plano) = 0
+        # En 2D, mostrar la proyección como una línea
+
+        # Centro del plano en proyección XY
+        ax.plot(punto_plano[0], punto_plano[1], 'o', color='blue',
+               markersize=12, markeredgecolor='white', markeredgewidth=2,
+               label='Centro plano', zorder=10)
+
+        # Vector normal proyectado en XY
+        normal_xy = normal[:2] / (np.linalg.norm(normal[:2]) + 1e-10)
+        vector_length = 0.3
+        ax.arrow(punto_plano[0], punto_plano[1],
+                normal_xy[0]*vector_length, normal_xy[1]*vector_length,
+                head_width=0.05, head_length=0.05, fc='blue', ec='blue',
+                linewidth=2, alpha=0.7, label='Normal (XY)', zorder=10)
+
+        # Línea del corte
+        distancia_corte = separacion_info['distancia_corte']
+        # Calcular punto del corte en la dirección de la normal
+        punto_corte = punto_plano + normal * distancia_corte
+
+        ax.plot(punto_corte[0], punto_corte[1], 'X', color='orange',
+               markersize=15, markeredgecolor='black', markeredgewidth=2,
+               label=f'Corte ({distancia_corte:.3f}m)', zorder=10)
+
+        ax.set_xlabel('X (m)', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Y (m)', fontsize=11, fontweight='bold')
+        ax.set_title(f'Ejemplar {int(ejemplar)} - Separación Antena/Soporte\n'
+                    f'{len(puntos_antena)} pts antena, {len(puntos_soporte)} pts soporte',
+                    fontsize=12, fontweight='bold')
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend(loc='best', fontsize=9)
+
+    # Ocultar ejes vacíos
+    for idx in range(n_ejemplares, len(axes_plano)):
+        axes_plano[idx].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+    print("✓ Visualización de separación antena/soporte completada")
+
+    # ========================================================================
+    # 2. GRÁFICOS DE DENSIDAD vs DISTANCIA CON DERIVADA
+    # ========================================================================
+
+    fig_dens, axes_dens = plt.subplots(n_rows_debug, n_cols_debug,
+                                       figsize=(7*n_cols_debug, 6*n_rows_debug))
+    if n_ejemplares == 1:
+        axes_dens = np.array([axes_dens])
+    axes_dens = axes_dens.flatten()
+
+    for idx, (ejemplar, datos) in enumerate(resultados_ejemplares.items()):
+        ax = axes_dens[idx]
+
+        if datos['densidad_info'] is None:
+            ax.text(0.5, 0.5, 'Análisis de densidad no aplicado',
+                   ha='center', va='center', fontsize=14)
+            ax.axis('off')
+            continue
+
+        densidad_info = datos['densidad_info']
+        separacion_info = datos['separacion_info']
+
+        distancias = densidad_info['distancias']
+        densidades = densidad_info['densidades']
+
+        # Gráfico de densidad
+        ax.plot(distancias, densidades, 'b-o', linewidth=2, markersize=5,
+               label='Densidad (puntos/m³)', alpha=0.7)
+
+        # Línea del plano (distancia = 0)
+        ax.axvline(0, color='blue', linestyle='--', linewidth=2,
+                  alpha=0.5, label='Plano frontal')
+
+        # Línea del corte detectado
+        if separacion_info:
+            distancia_corte = separacion_info['distancia_corte']
+            ax.axvline(distancia_corte, color='red', linestyle='--',
+                      linewidth=2.5, alpha=0.8,
+                      label=f'Corte ({distancia_corte:.3f}m)')
+
+            # Sombrear zona de antena
+            if distancia_corte > 0:
+                ax.axvspan(0, distancia_corte, alpha=0.15, color='green',
+                          label='Zona antena')
+            else:
+                ax.axvspan(distancia_corte, 0, alpha=0.15, color='green',
+                          label='Zona antena')
+
+        ax.set_xlabel('Distancia al plano (m)', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Densidad (puntos/m³)', fontsize=11, fontweight='bold')
+        ax.set_title(f'Ejemplar {int(ejemplar)} - Análisis de Densidad',
+                    fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend(loc='best', fontsize=9)
+
+    # Ocultar ejes vacíos
+    for idx in range(n_ejemplares, len(axes_dens)):
+        axes_dens[idx].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+    print("✓ Visualización de densidad vs distancia completada")
+
+
+# ============================================================================
+# VISUALIZACIÓN EN PLANTA - VISTA GENERAL (Visualizaciones Originales)
+# ============================================================================
+
+print("\n" + "=" * 60)
+print("GENERANDO VISUALIZACIÓN EN PLANTA - VISTA GENERAL")
+print("=" * 60)
+print("\nNOTA: El Bounding Box es un PARALELEPÍPEDO 3D orientado (OBB)")
+print(f"      calculado con método: {METODO_OBB}")
+print("")
+print("ALGORITMO MEJORADO de identificación de cara exterior:")
+print("  1. Se filtran las caras LATERALES (excluir superior/inferior con |normal.z| > 0.7)")
+print("  2. Se ordenan por distancia al punto del eje (0, 0, z_centro)")
+print("  3. Se toman las 2 caras más alejadas")
+print("  4. Se cuentan los puntos de la nube cercanos a cada cara (< 10cm)")
+print("  5. Se elige la cara con MÁS PUNTOS cercanos")
+print("  6. El vector normal apunta desde el centro de esa cara hacia fuera")
+print("")
+print("La vista en planta muestra:")
+print("  - Aristas de la base (línea sólida)")
+print("  - Aristas del techo (línea discontinua)")
+print("  - Aristas verticales (línea punteada)")
+print("  - Cara exterior en ROJO (la más alejada con más puntos)")
+print("  - Punto del eje de referencia en NARANJA (0, 0, z_centro)")
+print("  - Vector naranja: dirección desde punto eje → centro cara")
+print("  - Vector rojo: normal perpendicular a la cara exterior")
+print("")
+
+fig, ax = plt.subplots(figsize=(14, 14))
+
+# Colores para cada ejemplar
+colores = plt.cm.Set3(np.linspace(0, 1, len(ejemplares)))
+
+for idx, (ejemplar, datos) in enumerate(resultados_ejemplares.items()):
+    color = colores[idx]
+
+    # Obtener los 8 vértices del bounding box 3D
+    vertices = datos['vertices']  # 8 vértices [x, y, z]
+
+    # Proyección en XY (vista en planta)
+    vertices_xy = vertices[:, :2]
+
+    # Dibujar todas las aristas del paralelepípedo proyectadas en planta
+    # Los vértices están ordenados así:
+    # 0-3: base inferior, 4-7: techo superior
+    # Conexiones: 0-1, 1-2, 2-3, 3-0 (base)
+    #            4-5, 5-6, 6-7, 7-4 (techo)
+    #            0-4, 1-5, 2-6, 3-7 (verticales)
+
+    aristas = [
+        # Base inferior
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        # Techo superior
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        # Aristas verticales
+        [0, 4], [1, 5], [2, 6], [3, 7]
+    ]
+
+    # Dibujar todas las aristas
+    for i, arista in enumerate(aristas):
+        v1, v2 = arista
+        if i < 4:  # Base
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=2.5, alpha=0.8)
+        elif i < 8:  # Techo
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=2.5, alpha=0.6, linestyle='--')
+        else:  # Verticales
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=1.5, alpha=0.5, linestyle=':')
+
+    # Rellenar el polígono convexo de todos los vértices proyectados
+    hull = ConvexHull(vertices_xy)
+    vertices_ordenados = vertices_xy[hull.vertices]
+    polygon = plt.Polygon(vertices_ordenados, fill=True, alpha=0.15,
+                         facecolor=color, edgecolor='none',
+                         label=f'Ejemplar {int(ejemplar)}')
+    ax.add_patch(polygon)
+
+    # ===== CARA EXTERIOR =====
+    cara = datos['cara_exterior']
+    centro_cara = cara['centro_global']
+    normal = cara['normal_global']
+    vertices_cara_3d = cara['vertices_cara']  # Ya calculados en identificar_cara_exterior
+
+    # Proyectar vértices de la cara en XY
+    vertices_cara_xy = vertices_cara_3d[:, :2]
+
+    # Dibujar la cara exterior rellena
+    cara_poly = plt.Polygon(vertices_cara_xy, fill=True, alpha=0.4,
+                           facecolor='red', edgecolor='darkred', linewidth=4,
+                           zorder=5)
+    ax.add_patch(cara_poly)
+
+    # ===== CENTRO DE LA CARA EXTERIOR =====
+    ax.plot(centro_cara[0], centro_cara[1], 'o', color='darkred',
+           markersize=14, markeredgecolor='white', markeredgewidth=2.5,
+           zorder=8, label='Centro cara ext.' if idx == 0 else '')
+
+    # Centro del bounding box
+    centro = datos['bb_info']['centro']
+    ax.plot(centro[0], centro[1], 'o', color=color, markersize=12,
+           markeredgecolor='black', markeredgewidth=2, zorder=6)
+
+    # ===== PUNTO DEL EJE DE REFERENCIA (0,0,z) =====
+    punto_eje = cara['punto_eje_ref']
+    ax.plot(punto_eje[0], punto_eje[1], 's', color='orange', markersize=12,
+           markeredgecolor='black', markeredgewidth=2, zorder=7,
+           label='Punto eje (0,0,z)' if idx == 0 else '')
+
+    # ===== VECTOR: PUNTO EJE → CENTRO CARA (dirección) =====
+    arrow_eje_cara = FancyArrowPatch(
+        (punto_eje[0], punto_eje[1]),
+        (centro_cara[0], centro_cara[1]),
+        arrowstyle='->', mutation_scale=25, linewidth=2.5,
+        color='orange', alpha=0.8, zorder=6,
+        label='Vector eje→cara' if idx == 0 else ''
+    )
+    ax.add_patch(arrow_eje_cara)
+
+    # ===== VECTOR NORMAL desde centro de cara =====
+    escala_vector = 1.0
+    vector_end = centro_cara[:2] + normal[:2] * escala_vector
+
+    arrow = FancyArrowPatch(
+        (centro_cara[0], centro_cara[1]),
+        (vector_end[0], vector_end[1]),
+        arrowstyle='->', mutation_scale=25, linewidth=3,
+        color='red', zorder=10,
+        label='Vector normal' if idx == 0 else ''
+    )
+    ax.add_patch(arrow)
+
+    # Etiqueta del ejemplar
+    ax.text(centro[0], centro[1], f'E{int(ejemplar)}',
+           fontsize=13, fontweight='bold', ha='center', va='center',
+           bbox=dict(boxstyle='round', facecolor='white', alpha=0.9,
+                    edgecolor=color, linewidth=2))
+
+# Dibujar el eje de la torre (origen)
+ax.plot(0, 0, 'X', color='black', markersize=22, markeredgecolor='red',
+       markeredgewidth=3, label='Eje Torre (0,0)', zorder=10)
+
+# Círculo que representa la torre
+circulo_torre = plt.Circle((0, 0), 0.5, fill=False, edgecolor='black',
+                          linewidth=2.5, linestyle='--', label='Torre')
+ax.add_patch(circulo_torre)
+
+# Configuración de ejes
+ax.set_xlabel('X (m)', fontsize=14, fontweight='bold')
+ax.set_ylabel('Y (m)', fontsize=14, fontweight='bold')
+ax.set_title(f'Vista en Planta - Familia {int(familia_seleccionada)}\n'
+            f'Paralelepípedos 3D Orientados (OBB) - Proyección en XY\n'
+            f'(Cara Exterior = Rojo Oscuro | Base = Sólida | Techo = Discontinua | Verticales = Punteada)',
+            fontsize=15, fontweight='bold', pad=20)
+
+# Aspecto igual para mantener proporciones
+ax.set_aspect('equal')
+ax.grid(True, alpha=0.3, linestyle='--')
+
+# Crear elementos de leyenda personalizados
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+elementos_leyenda = [
+    Line2D([0], [0], color='gray', linewidth=2.5, label='Aristas Base (sólida)'),
+    Line2D([0], [0], color='gray', linewidth=2.5, linestyle='--', label='Aristas Techo (discontinua)'),
+    Line2D([0], [0], color='gray', linewidth=1.5, linestyle=':', label='Aristas Verticales (punteada)'),
+    Patch(facecolor='red', alpha=0.4, edgecolor='darkred', linewidth=4, label='Cara Exterior (rellena)'),
+    Line2D([0], [0], marker='o', color='darkred', markersize=12, linestyle='None',
+           markeredgecolor='white', markeredgewidth=2, label='Centro cara exterior'),
+    Line2D([0], [0], marker='X', color='black', markersize=12, linestyle='None',
+           markeredgecolor='red', markeredgewidth=2, label='Eje Torre (0,0,0)'),
+    Line2D([0], [0], marker='s', color='orange', markersize=10, linestyle='None',
+           markeredgecolor='black', markeredgewidth=2, label='Punto Eje (0,0,z)'),
+    FancyArrowPatch((0,0), (0.1,0.1), arrowstyle='->', mutation_scale=15,
+                    linewidth=2, color='orange', label='Vector eje→cara'),
+    FancyArrowPatch((0,0), (0.1,0.1), arrowstyle='->', mutation_scale=15,
+                    linewidth=2.5, color='red', label='Vector Normal')
+]
+
+# Añadir ejemplares a la leyenda
+for idx, ejemplar in enumerate(ejemplares):
+    elementos_leyenda.append(
+        Line2D([0], [0], marker='o', color=colores[idx], markersize=10,
+               linestyle='None', markeredgecolor='black', markeredgewidth=1.5,
+               label=f'Ejemplar {int(ejemplar)}')
+    )
+
+ax.legend(handles=elementos_leyenda, loc='upper left', fontsize=9, framealpha=0.95, ncol=2)
+
+# Ajustar límites
+all_points = np.vstack([datos['puntos_limpios'] for datos in resultados_ejemplares.values()])
+margin = 2
+ax.set_xlim(all_points[:, 0].min() - margin, all_points[:, 0].max() + margin)
+ax.set_ylim(all_points[:, 1].min() - margin, all_points[:, 1].max() + margin)
+
+plt.tight_layout()
+plt.show()
+
+print("✓ Visualización general completada")
+
+
+# ============================================================================
+# VISUALIZACIÓN EN PLANTA - EJEMPLARES INDIVIDUALES
+# ============================================================================
+
+print("\n" + "=" * 60)
+print("GENERANDO VISUALIZACIONES INDIVIDUALES POR EJEMPLAR")
+print("=" * 60)
+
+# Calcular número de filas y columnas para subplots
+n_ejemplares = len(ejemplares)
+n_cols = min(3, n_ejemplares)
+n_rows = int(np.ceil(n_ejemplares / n_cols))
+
+fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 6*n_rows))
+if n_ejemplares == 1:
+    axes = np.array([axes])
+axes = axes.flatten()
+
+for idx, (ejemplar, datos) in enumerate(resultados_ejemplares.items()):
+    ax = axes[idx]
+    color = colores[idx]
+
+    # Puntos para bbox (puede ser filtrados o todos)
+    puntos = datos['puntos_para_bbox']
+    ax.scatter(puntos[:, 0], puntos[:, 1], c=[color], s=40, alpha=0.7,
+              edgecolors='black', linewidth=0.5, label='Puntos')
+
+    # Obtener los 8 vértices del bounding box
+    vertices = datos['vertices']
+    vertices_xy = vertices[:, :2]
+
+    # Dibujar todas las aristas del paralelepípedo
+    aristas = [
+        # Base inferior
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        # Techo superior
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        # Aristas verticales
+        [0, 4], [1, 5], [2, 6], [3, 7]
+    ]
+
+    for i, arista in enumerate(aristas):
+        v1, v2 = arista
+        if i < 4:  # Base
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=2.5, alpha=0.8,
+                   label='Base' if i == 0 else '')
+        elif i < 8:  # Techo
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=2.5, alpha=0.6, linestyle='--',
+                   label='Techo' if i == 4 else '')
+        else:  # Verticales
+            ax.plot([vertices_xy[v1, 0], vertices_xy[v2, 0]],
+                   [vertices_xy[v1, 1], vertices_xy[v2, 1]],
+                   color=color, linewidth=1.5, alpha=0.5, linestyle=':',
+                   label='Aristas verticales' if i == 8 else '')
+
+    # ===== CARA EXTERIOR =====
+    cara = datos['cara_exterior']
+    centro_cara = cara['centro_global']
+    normal = cara['normal_global']
+    vertices_cara_3d = cara['vertices_cara']
+
+    # Proyectar vértices en XY
+    vertices_cara_xy = vertices_cara_3d[:, :2]
+
+    # Rellenar cara exterior
+    cara_poly = plt.Polygon(vertices_cara_xy, fill=True, alpha=0.3,
+                           facecolor='red', edgecolor='darkred', linewidth=4,
+                           label='Cara Exterior')
+    ax.add_patch(cara_poly)
+
+    # Centro de la cara exterior
+    ax.plot(centro_cara[0], centro_cara[1], 'o', color='darkred',
+           markersize=14, markeredgecolor='white', markeredgewidth=2.5,
+           label='Centro cara ext.', zorder=8)
+
+    # Centro del BB
+    centro = datos['bb_info']['centro']
+    ax.plot(centro[0], centro[1], 'o', color=color, markersize=15,
+           markeredgecolor='black', markeredgewidth=2, label='Centro BB', zorder=6)
+
+    # Punto del eje a la altura del centro
+    punto_eje = cara['punto_eje_ref']
+    ax.plot(punto_eje[0], punto_eje[1], 's', color='orange', markersize=12,
+           markeredgecolor='black', markeredgewidth=2, label='Punto Eje (0,0,z)', zorder=7)
+
+    # Vector desde punto eje al centro de la cara
+    arrow_eje_cara = FancyArrowPatch(
+        (punto_eje[0], punto_eje[1]),
+        (centro_cara[0], centro_cara[1]),
+        arrowstyle='->', mutation_scale=20, linewidth=2,
+        color='orange', alpha=0.8, zorder=6,
+        label='Vector eje→cara'
+    )
+    ax.add_patch(arrow_eje_cara)
+
+    # Vector normal
+    escala_vector = max(datos['bb_info']['dimensiones'][:2]) * 0.5
+    vector_end = centro_cara[:2] + normal[:2] * escala_vector
+
+    arrow = FancyArrowPatch(
+        (centro_cara[0], centro_cara[1]),
+        (vector_end[0], vector_end[1]),
+        arrowstyle='->', mutation_scale=25, linewidth=3,
+        color='red', zorder=10, label='Vector Normal'
+    )
+    ax.add_patch(arrow)
+
+    # Eje de la torre
+    ax.plot(0, 0, 'X', color='black', markersize=20, markeredgecolor='red',
+           markeredgewidth=2.5, zorder=10)
+
+    # Configuración
+    ax.set_xlabel('X (m)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Y (m)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Ejemplar {int(ejemplar)}\n({len(puntos)} puntos)',
+                fontsize=14, fontweight='bold', pad=10)
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.legend(loc='best', fontsize=9, framealpha=0.9)
+
+    # Ajustar límites con margen
+    margin = max(datos['bb_info']['dimensiones'][:2]) * 0.3
+    ax.set_xlim(puntos[:, 0].min() - margin, puntos[:, 0].max() + margin)
+    ax.set_ylim(puntos[:, 1].min() - margin, puntos[:, 1].max() + margin)
+
+# Ocultar ejes vacíos si hay menos ejemplares que subplots
+for idx in range(n_ejemplares, len(axes)):
+    axes[idx].axis('off')
+
+plt.tight_layout()
+plt.show()
+
+print(f"✓ {n_ejemplares} visualizaciones individuales completadas")
+
+
+# ============================================================================
+# VISUALIZACIÓN 3D DE BOUNDING BOXES
+# ============================================================================
+
+print("\nGenerando visualización 3D de bounding boxes...")
+
+fig = plt.figure(figsize=(16, 12))
+ax = fig.add_subplot(111, projection='3d')
+
+for idx, (ejemplar, datos) in enumerate(resultados_ejemplares.items()):
+    color = colores[idx]
+
+    # Puntos para bbox
+    puntos = datos['puntos_para_bbox']
+    ax.scatter(puntos[:, 0], puntos[:, 1], puntos[:, 2],
+              c=[color], s=30, alpha=0.6, edgecolors='black', linewidth=0.3,
+              label=f'Ejemplar {int(ejemplar)}')
+
+    # Dibujar bounding box
+    vertices = datos['vertices']
+
+    # Definir las 6 caras del cuboide
+    caras = [
+        [vertices[0], vertices[1], vertices[2], vertices[3]],  # Base
+        [vertices[4], vertices[5], vertices[6], vertices[7]],  # Techo
+        [vertices[0], vertices[1], vertices[5], vertices[4]],  # Cara 1
+        [vertices[2], vertices[3], vertices[7], vertices[6]],  # Cara 2
+        [vertices[0], vertices[3], vertices[7], vertices[4]],  # Cara 3
+        [vertices[1], vertices[2], vertices[6], vertices[5]]   # Cara 4
+    ]
+
+    # Dibujar caras del bounding box
+    poly = Poly3DCollection(caras, alpha=0.15, facecolor=color,
+                           edgecolor='black', linewidth=1.5)
+    ax.add_collection3d(poly)
+
+    # Vector normal desde la cara exterior
+    cara = datos['cara_exterior']
+    centro_cara = cara['centro_global']
+    normal = cara['normal_global']
+
+    # Dibujar vector normal
+    escala_vector = 1.0
+    ax.quiver(centro_cara[0], centro_cara[1], centro_cara[2],
+             normal[0]*escala_vector, normal[1]*escala_vector, normal[2]*escala_vector,
+             color='red', arrow_length_ratio=0.3, linewidth=3)
+
+    # Punto del eje a la altura del centro de la BB
+    punto_eje = cara['punto_eje_ref']
+    ax.scatter([punto_eje[0]], [punto_eje[1]], [punto_eje[2]],
+              c='orange', marker='s', s=200,
+              label='Punto eje ref' if idx == 0 else '',
+              edgecolors='black', linewidth=2, zorder=8)
+
+    # Línea desde punto del eje al centro de la cara
+    ax.plot([punto_eje[0], centro_cara[0]],
+           [punto_eje[1], centro_cara[1]],
+           [punto_eje[2], centro_cara[2]],
+           color='orange', linewidth=2, linestyle=':', alpha=0.7, zorder=7)
+
+# Eje de la torre
+ax.scatter([0], [0], [0], c='black', marker='X', s=300,
+          label='Eje Torre', edgecolors='red', linewidth=2)
+
+ax.set_xlabel('X (m)', fontsize=12, fontweight='bold')
+ax.set_ylabel('Y (m)', fontsize=12, fontweight='bold')
+ax.set_zlabel('Z (m)', fontsize=12, fontweight='bold')
+ax.set_title(f'Vista 3D - Familia {int(familia_seleccionada)} con Bounding Boxes',
+            fontsize=14, fontweight='bold')
+
+# Aspecto igual
+max_range = np.array([
+    all_points[:, 0].max() - all_points[:, 0].min(),
+    all_points[:, 1].max() - all_points[:, 1].min(),
+    all_points[:, 2].max() - all_points[:, 2].min()
+]).max() / 2.0
+
+mid_x = (all_points[:, 0].max() + all_points[:, 0].min()) * 0.5
+mid_y = (all_points[:, 1].max() + all_points[:, 1].min()) * 0.5
+mid_z = (all_points[:, 2].max() + all_points[:, 2].min()) * 0.5
+
+ax.set_xlim(mid_x - max_range, mid_x + max_range)
+ax.set_ylim(mid_y - max_range, mid_y + max_range)
+ax.set_zlim(mid_z - max_range, mid_z + max_range)
+ax.set_box_aspect([1, 1, 1])
+
+ax.legend(fontsize=10)
+ax.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+print("✓ Visualización 3D completada")
+
+print("\n" + "=" * 60)
+print("TODAS LAS VISUALIZACIONES COMPLETADAS")
+print("=" * 60)
