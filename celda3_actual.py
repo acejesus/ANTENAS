@@ -50,6 +50,45 @@ def limpiar_outliers(puntos, std_threshold=2.5):
     mask = distancias < (media_dist + std_threshold * std_dist)
     return puntos[mask]
 
+def calcular_plano_mejor_ajuste(puntos):
+    """
+    Calcula el plano de mejor ajuste usando PCA.
+    Retorna la normal del plano y los eigenvalues.
+    """
+    from sklearn.decomposition import PCA
+
+    centroide = np.mean(puntos, axis=0)
+    puntos_centrados = puntos - centroide
+
+    pca = PCA(n_components=3)
+    pca.fit(puntos_centrados)
+
+    # La normal del plano es el eigenvector con menor eigenvalue (componente 2)
+    normal = pca.components_[2]
+    eigenvalues = pca.explained_variance_
+
+    return {
+        'normal': normal,
+        'centroide': centroide,
+        'eigenvalues': eigenvalues,
+        'ratio_varianza': eigenvalues[0] / eigenvalues[2] if eigenvalues[2] > 0 else 0
+    }
+
+def calcular_angulo_entre_vectores(v1, v2):
+    """
+    Calcula el ángulo en grados entre dos vectores.
+    """
+    # Normalizar vectores
+    v1_norm = v1 / np.linalg.norm(v1)
+    v2_norm = v2 / np.linalg.norm(v2)
+
+    # Calcular ángulo
+    dot_product = np.clip(np.dot(v1_norm, v2_norm), -1.0, 1.0)
+    angulo_rad = np.arccos(np.abs(dot_product))  # Abs para considerar vectores opuestos como paralelos
+    angulo_deg = np.degrees(angulo_rad)
+
+    return angulo_deg
+
 def calcular_bounding_box(puntos):
     """
     Calcula el Oriented Bounding Box (OBB) usando trimesh.
@@ -388,14 +427,73 @@ for ejemplar in ejemplares:
           f"{cara_exterior['normal_global'][1]:.3f}, {cara_exterior['normal_global'][2]:.3f})")
     print(f"  Producto punto: {cara_exterior.get('dot_producto', 0):.3f}")
 
+    # 4. VALIDACIÓN DE ORIENTACIÓN
+    print(f"\n  [VALIDACIÓN] Coherencia entre bbox y plano limpio:")
+
+    # Calcular plano de mejor ajuste con los puntos limpios
+    plano_limpio = calcular_plano_mejor_ajuste(puntos_limpios)
+
+    # Calcular ángulo entre normal del plano y normal de la cara exterior
+    normal_cara = cara_exterior['normal_global']
+    normal_plano = plano_limpio['normal']
+    angulo_validacion = calcular_angulo_entre_vectores(normal_cara, normal_plano)
+
+    print(f"    - Normal cara exterior: ({normal_cara[0]:.3f}, {normal_cara[1]:.3f}, {normal_cara[2]:.3f})")
+    print(f"    - Normal plano limpio: ({normal_plano[0]:.3f}, {normal_plano[1]:.3f}, {normal_plano[2]:.3f})")
+    print(f"    - Diferencia angular: {angulo_validacion:.2f}°")
+
+    # UMBRAL DE VALIDACIÓN: 10° (modificado según recomendación del usuario)
+    UMBRAL_REORIENTACION = 10.0
+
+    if angulo_validacion > UMBRAL_REORIENTACION:
+        print(f"    ⚠️ ADVERTENCIA: Pobre alineación ({angulo_validacion:.2f}°)")
+        print(f"    - La bbox no está bien orientada respecto a la antena")
+        print(f"\n  [RE-ORIENTACIÓN] Recalculando bbox usando plano limpio:")
+
+        # TODO: Implementar recálculo de bbox orientado según el plano limpio
+        # Por ahora, solo se marca la advertencia
+        # En una versión futura, aquí se recalcularía la bbox con orientación forzada
+        print(f"    ⚠️ NOTA: Recálculo de bbox pendiente de implementación")
+
+    elif angulo_validacion < 5.0:
+        print(f"    ✓ Excelente alineación (< 5°)")
+    else:
+        print(f"    ✓ Buena alineación (< {UMBRAL_REORIENTACION}°)")
+
     # Guardar resultados
     resultados_ejemplares[ejemplar] = {
         'puntos_originales': puntos,
         'puntos_limpios': puntos_limpios,
         'bb_info': bb_info,
         'vertices': obtener_vertices_box(bb_info),
-        'cara_exterior': cara_exterior
+        'cara_exterior': cara_exterior,
+        'plano_limpio': plano_limpio,
+        'angulo_validacion': angulo_validacion
     }
+
+# ============================================================================
+# RESUMEN DE VALIDACIÓN DE ORIENTACIÓN
+# ============================================================================
+
+print("\n" + "=" * 60)
+print("RESUMEN DE VALIDACIÓN DE ORIENTACIÓN")
+print("=" * 60)
+
+UMBRAL_REORIENTACION = 10.0
+for ejemplar, datos in resultados_ejemplares.items():
+    angulo = datos['angulo_validacion']
+    if angulo > UMBRAL_REORIENTACION:
+        estado = f"⚠️ Requiere re-orientación ({angulo:.1f}°)"
+    elif angulo < 5.0:
+        estado = f"✓ Excelente ({angulo:.1f}°)"
+    else:
+        estado = f"✓ Buena ({angulo:.1f}°)"
+
+    print(f"  Ejemplar {int(ejemplar)}: {estado}")
+
+print(f"\n  ⚠️ NOTA: Ejemplares con ángulo > {UMBRAL_REORIENTACION}° requieren recálculo de bbox")
+print(f"           (pendiente de implementación)")
+print("=" * 60)
 
 # ============================================================================
 # VISUALIZACIÓN EN PLANTA - VISTA GENERAL (solo BB y caras exteriores)
