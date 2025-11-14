@@ -18,7 +18,6 @@ from matplotlib.patches import Rectangle, FancyArrowPatch
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import ConvexHull
-from sklearn.linear_model import RANSACRegressor
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -67,73 +66,78 @@ def limpiar_outliers(puntos, std_threshold=2.5):
     return puntos[mask]
 
 
-def ajustar_plano_ransac(puntos, residual_threshold=0.05, max_trials=1000):
+def ajustar_plano_bestfit(puntos):
     """
-    Ajusta un plano a los puntos usando RANSAC para robustez contra outliers.
+    Encuentra el plano de mejor ajuste a través de todos los puntos usando PCA.
 
-    El plano se define como: ax + by + cz + d = 0
-    donde (a, b, c) es el vector normal (normalizado)
+    El plano se ajusta minimizando la suma de distancias cuadradas perpendiculares.
+    La normal del plano es el eigenvector con menor eigenvalor (dirección de menor varianza).
+
+    Como la mayoría de puntos forman la superficie reflectora de la antena,
+    el plano se orientará automáticamente según esa superficie.
 
     Args:
         puntos: array Nx3 de puntos
-        residual_threshold: distancia máxima para considerar un punto como inlier (metros)
-        max_trials: número máximo de iteraciones RANSAC
 
     Returns:
         dict con:
-        - normal: vector normal al plano (normalizado)
-        - punto_en_plano: un punto que pertenece al plano
+        - normal: vector normal al plano (orientado hacia el exterior)
+        - punto_en_plano: centroide (punto que pertenece al plano)
         - d: coeficiente d de la ecuación del plano
-        - inliers_mask: máscara booleana de inliers
-        - n_inliers: número de inliers
+        - eigenvalues: valores propios ordenados (mayor a menor varianza)
+        - n_inliers: número de puntos (todos se usan en PCA)
     """
     if len(puntos) < 3:
         raise ValueError("Se necesitan al menos 3 puntos para ajustar un plano")
 
-    # Preparar datos para RANSAC
-    X = puntos[:, :2]  # X, Y
-    y = puntos[:, 2]   # Z
+    # Calcular centroide
+    centroide = np.mean(puntos, axis=0)
 
-    # RANSAC para ajustar Z = aX + bY + c
-    ransac = RANSACRegressor(
-        residual_threshold=residual_threshold,
-        max_trials=max_trials,
-        random_state=42
-    )
+    # Centrar puntos
+    puntos_centrados = puntos - centroide
 
-    ransac.fit(X, y)
+    # PCA: calcular matriz de covarianza
+    cov_matrix = np.cov(puntos_centrados.T)
 
-    # Extraer coeficientes
-    a, b = ransac.estimator_.coef_
-    c = ransac.estimator_.intercept_
+    # Obtener eigenvalores y eigenvectores
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
 
-    # El plano es: Z = aX + bY + c
-    # Reescribir como: aX + bY - Z + c = 0
-    # Vector normal (sin normalizar): (a, b, -1)
-    normal_sin_normalizar = np.array([a, b, -1])
-    normal = normal_sin_normalizar / np.linalg.norm(normal_sin_normalizar)
+    # Ordenar por eigenvalor (mayor a menor varianza)
+    idx_sorted = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[idx_sorted].real  # Convertir a real
+    eigenvectors = eigenvectors[:, idx_sorted].real
+
+    # La normal es el eigenvector con MENOR eigenvalor (menor varianza)
+    # Esto representa la dirección perpendicular al plano de mejor ajuste
+    normal = eigenvectors[:, 2]  # Tercer componente (menor varianza)
+
+    # Orientar la normal hacia el exterior (alejándose de la torre)
+    # Vector desde torre (en el eje Z del centroide) hacia centroide
+    punto_eje = np.array([0.0, 0.0, centroide[2]])
+    vector_torre_centroide = centroide - punto_eje
+
+    # Si la normal apunta hacia la torre, invertirla
+    if np.dot(normal, vector_torre_centroide) < 0:
+        normal = -normal
 
     # Coeficiente d de la ecuación ax + by + cz + d = 0
-    # Como tenemos aX + bY - Z + c = 0, entonces d = c
-    d = c
+    d = -np.dot(normal, centroide)
 
-    # Punto en el plano (usar el centroide de los inliers)
-    inliers_mask = ransac.inlier_mask_
-    puntos_inliers = puntos[inliers_mask]
-    punto_en_plano = np.mean(puntos_inliers, axis=0)
+    # Calcular ratio de varianza (mide qué tan plano es)
+    ratio_varianza = eigenvalues[0] / eigenvalues[2] if eigenvalues[2] > 1e-10 else np.inf
 
-    n_inliers = np.sum(inliers_mask)
-    porcentaje_inliers = 100 * n_inliers / len(puntos)
-
-    print(f"    Plano ajustado: {n_inliers}/{len(puntos)} inliers ({porcentaje_inliers:.1f}%)")
-    print(f"    Normal: ({normal[0]:.3f}, {normal[1]:.3f}, {normal[2]:.3f})")
+    print(f"    Plano de mejor ajuste (PCA):")
+    print(f"    - Normal: ({normal[0]:.3f}, {normal[1]:.3f}, {normal[2]:.3f})")
+    print(f"    - Eigenvalues: [{eigenvalues[0]:.4f}, {eigenvalues[1]:.4f}, {eigenvalues[2]:.4f}]")
+    print(f"    - Ratio varianza (max/min): {ratio_varianza:.1f}x")
+    print(f"    - Todos los {len(puntos)} puntos usados en PCA")
 
     return {
         'normal': normal,
-        'punto_en_plano': punto_en_plano,
+        'punto_en_plano': centroide,
         'd': d,
-        'inliers_mask': inliers_mask,
-        'n_inliers': n_inliers
+        'eigenvalues': eigenvalues,
+        'n_inliers': len(puntos)  # Todos los puntos se usan
     }
 
 
@@ -776,28 +780,9 @@ for ejemplar in ejemplares:
     print(f"  Puntos tras limpieza: {len(puntos_limpios)} "
           f"(eliminados: {len(puntos) - len(puntos_limpios)})")
 
-    # 2. NUEVO: Ajustar plano a la superficie frontal
+    # 2. NUEVO: Ajustar plano de mejor ajuste a la superficie frontal
     print("\n  [PASO 1] Ajuste de plano a superficie frontal:")
-    try:
-        plano_info = ajustar_plano_ransac(puntos_limpios,
-                                          residual_threshold=0.05,
-                                          max_trials=1000)
-    except Exception as e:
-        print(f"    ⚠️ Error ajustando plano: {e}")
-        print(f"    Usando aproximación con centroide y PCA...")
-        # Fallback: usar PCA simple
-        centroide = np.mean(puntos_limpios, axis=0)
-        from sklearn.decomposition import PCA
-        pca = PCA(n_components=3)
-        pca.fit(puntos_limpios - centroide)
-        normal = pca.components_[2]  # Tercer componente (menor varianza)
-        plano_info = {
-            'normal': normal,
-            'punto_en_plano': centroide,
-            'd': -np.dot(normal, centroide),
-            'inliers_mask': np.ones(len(puntos_limpios), dtype=bool),
-            'n_inliers': len(puntos_limpios)
-        }
+    plano_info = ajustar_plano_bestfit(puntos_limpios)
 
     # 3. NUEVO: Análisis de densidad perpendicular al plano
     if APLICAR_SEPARACION:
