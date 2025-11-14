@@ -615,6 +615,100 @@ def calcular_bounding_box_open3d(puntos, metodo='minimal'):
     }
 
 
+def calcular_bounding_box_orientado_plano(puntos, plano_info):
+    """
+    Calcula un OBB orientado según un plano de referencia.
+
+    Una de las caras del bbox será paralela al plano dado.
+    Los otros dos ejes se calculan con PCA en la proyección sobre el plano.
+
+    Args:
+        puntos: array Nx3
+        plano_info: dict con 'normal' y 'punto_en_plano'
+
+    Returns:
+        dict con formato compatible con calcular_bounding_box
+    """
+    # La normal del plano será uno de los ejes del bbox
+    normal = plano_info['normal']
+    punto_plano = plano_info['punto_en_plano']
+
+    # Crear sistema de coordenadas del plano
+    # Eje Z' = normal del plano
+    eje_z = normal / np.linalg.norm(normal)
+
+    # Proyectar puntos al plano para encontrar los otros dos ejes
+    # Distancias con signo al plano
+    vectores = puntos - punto_plano
+    distancias = np.dot(vectores, eje_z)
+
+    # Proyectar puntos al plano
+    puntos_proyectados = puntos - np.outer(distancias, eje_z)
+
+    # Centrar puntos proyectados
+    centroide_proyectado = np.mean(puntos_proyectados, axis=0)
+    puntos_centrados = puntos_proyectados - centroide_proyectado
+
+    # PCA en 3D para encontrar direcciones principales en el plano
+    cov_matrix = np.cov(puntos_centrados.T)
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+
+    # Ordenar eigenvalores
+    idx_sorted = np.argsort(eigenvalues.real)[::-1]
+    eigenvectors = eigenvectors[:, idx_sorted].real
+
+    # Tomar los dos eigenvectores con mayor varianza
+    # y ortogonalizarlos respecto a la normal
+    candidatos = eigenvectors[:, :2]
+
+    # Primer eje: proyectar primer eigenvector al plano y normalizar
+    eje_x = candidatos[:, 0] - np.dot(candidatos[:, 0], eje_z) * eje_z
+    eje_x = eje_x / (np.linalg.norm(eje_x) + 1e-10)
+
+    # Segundo eje: perpendicular a eje_x y eje_z
+    eje_y = np.cross(eje_z, eje_x)
+    eje_y = eje_y / (np.linalg.norm(eje_y) + 1e-10)
+
+    # Matriz de rotación (ejes como columnas)
+    ejes = np.column_stack([eje_x, eje_y, eje_z])
+
+    # Proyectar puntos a sistema de coordenadas local
+    centroide = np.mean(puntos, axis=0)
+    puntos_centrados = puntos - centroide
+    puntos_locales = puntos_centrados @ ejes
+
+    # Calcular dimensiones
+    min_coords = np.min(puntos_locales, axis=0)
+    max_coords = np.max(puntos_locales, axis=0)
+    dimensiones = max_coords - min_coords
+
+    # Centro del bbox en coordenadas locales
+    centro_local = (min_coords + max_coords) / 2
+
+    # Centro en coordenadas globales
+    centro = centroide + centro_local @ ejes.T
+
+    # Verificar puntos dentro
+    puntos_centrados_bbox = puntos - centro
+    puntos_locales_bbox = puntos_centrados_bbox @ ejes
+    dentro = np.all((puntos_locales_bbox >= min_coords - 0.001) &
+                    (puntos_locales_bbox <= max_coords + 0.001), axis=1)
+    puntos_fuera = np.sum(~dentro)
+
+    volumen = np.prod(dimensiones)
+
+    return {
+        'centro': centro,
+        'dimensiones': dimensiones,
+        'ejes': ejes,
+        'min_coords': min_coords,
+        'max_coords': max_coords,
+        'volumen': volumen,
+        'puntos_fuera': puntos_fuera,
+        'metodo': 'plano_orientado'
+    }
+
+
 def calcular_bounding_box(puntos, metodo='trimesh', open3d_variant='minimal'):
     """
     Calcula el OBB usando el método especificado.
@@ -991,6 +1085,7 @@ for ejemplar in ejemplares:
           f"{cara_exterior['normal_global'][2]:.3f})")
 
     # VALIDACIÓN: Comparar normal de cara exterior con plano de puntos limpios
+    bbox_reorientada = False
     if APLICAR_SEPARACION and plano_info_verificacion is not None:
         print("\n  [VALIDACIÓN] Coherencia entre bbox y plano limpio:")
         normal_cara = cara_exterior['normal_global']
@@ -1012,9 +1107,43 @@ for ejemplar in ejemplares:
         elif angulo_validacion < 30:
             print(f"    ⚠️ Alineación moderada (< 30°)")
         else:
-            print(f"    ⚠️ ADVERTENCIA: Pobre alineación (> 30°)")
-            print(f"    - La bbox puede no estar bien orientada")
-            print(f"    - Considerar usar el plano limpio para re-orientar la bbox")
+            print(f"    ⚠️ ADVERTENCIA: Pobre alineación ({angulo_validacion:.2f}°)")
+            print(f"    - La bbox no está bien orientada respecto a la antena")
+            print(f"\n  [RE-ORIENTACIÓN] Recalculando bbox usando plano limpio:")
+
+            # Re-calcular bbox orientada según plano limpio
+            bb_info_nueva = calcular_bounding_box_orientado_plano(puntos_para_bbox, plano_info_verificacion)
+
+            print(f"    ✓ Nueva bbox orientada al plano:")
+            print(f"      - Dimensiones: {bb_info_nueva['dimensiones'][0]:.3f} × "
+                  f"{bb_info_nueva['dimensiones'][1]:.3f} × {bb_info_nueva['dimensiones'][2]:.3f} m")
+            print(f"      - Volumen: {bb_info_nueva['volumen']:.6f} m³")
+            print(f"      - Puntos fuera: {bb_info_nueva['puntos_fuera']}")
+
+            # Comparar volúmenes
+            aumento_volumen = ((bb_info_nueva['volumen'] - bb_info['volumen']) /
+                              bb_info['volumen'] * 100)
+            print(f"      - Cambio en volumen: {aumento_volumen:+.1f}%")
+
+            # Actualizar bbox y cara exterior
+            bb_info = bb_info_nueva
+            cara_exterior = identificar_cara_exterior(bb_info, puntos_para_bbox)
+
+            # Verificar nueva alineación
+            normal_cara_nueva = cara_exterior['normal_global']
+            angulo_validacion_nueva = np.arccos(np.clip(np.abs(np.dot(normal_cara_nueva, normal_plano)),
+                                                         0, 1)) * 180 / np.pi
+            print(f"      - Nueva alineación: {angulo_validacion_nueva:.2f}°")
+
+            if angulo_validacion_nueva < 10:
+                print(f"      ✓ Excelente alineación alcanzada")
+            elif angulo_validacion_nueva < 20:
+                print(f"      ✓ Buena alineación alcanzada")
+            else:
+                print(f"      ⚠️ Alineación mejorada pero aún moderada")
+
+            angulo_validacion = angulo_validacion_nueva
+            bbox_reorientada = True
 
     # Guardar resultados
     resultados_ejemplares[ejemplar] = {
@@ -1024,6 +1153,7 @@ for ejemplar in ejemplares:
         'plano_info_verificacion': plano_info_verificacion if APLICAR_SEPARACION else None,
         'angulo_planos': angulo_planos if APLICAR_SEPARACION else None,
         'angulo_validacion_bbox': angulo_validacion if (APLICAR_SEPARACION and plano_info_verificacion is not None) else None,
+        'bbox_reorientada': bbox_reorientada,
         'densidad_info': densidad_info if APLICAR_SEPARACION else None,
         'separacion_info': separacion_info,
         'puntos_para_bbox': puntos_para_bbox,
@@ -1036,6 +1166,39 @@ print("\n" + "=" * 60)
 print("PROCESAMIENTO COMPLETADO")
 print("=" * 60)
 print(f"\n✓ {len(resultados_ejemplares)} ejemplares procesados")
+
+# Resumen de validaciones y re-orientaciones
+if APLICAR_SEPARACION:
+    print("\n" + "-" * 60)
+    print("RESUMEN DE VALIDACIÓN DE ORIENTACIÓN")
+    print("-" * 60)
+
+    reorientados = []
+    for ejemplar, datos in resultados_ejemplares.items():
+        if datos.get('bbox_reorientada', False):
+            reorientados.append(int(ejemplar))
+            angulo_planos = datos.get('angulo_planos', 0)
+            angulo_validacion = datos.get('angulo_validacion_bbox', 0)
+            print(f"\n  Ejemplar {int(ejemplar)}:")
+            print(f"    - Plano afectado por soportes: {angulo_planos:.1f}°")
+            print(f"    - Bbox re-orientada al plano limpio")
+            print(f"    - Alineación final: {angulo_validacion:.1f}°")
+        else:
+            angulo_validacion = datos.get('angulo_validacion_bbox', 0)
+            if angulo_validacion is not None:
+                if angulo_validacion < 20:
+                    status = "✓ Buena"
+                elif angulo_validacion < 30:
+                    status = "⚠️ Moderada"
+                else:
+                    status = "✗ Pobre"
+                print(f"  Ejemplar {int(ejemplar)}: {status} ({angulo_validacion:.1f}°)")
+
+    if reorientados:
+        print(f"\n  ✓ {len(reorientados)} bbox(s) re-orientada(s): {reorientados}")
+    else:
+        print(f"\n  ✓ Todas las bbox mantienen orientación original")
+    print("-" * 60)
 
 
 # ============================================================================
