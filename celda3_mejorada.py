@@ -1039,95 +1039,131 @@ print(f"\n✓ {len(resultados_ejemplares)} ejemplares procesados")
 
 
 # ============================================================================
-# EXPORTAR RESULTADOS A EXCEL
+# EXPORTAR RESULTADOS A EXCEL - FORMATO ORIGINAL PARA DYNAMO
 # ============================================================================
 
 print("\n" + "=" * 60)
-print("EXPORTANDO RESULTADOS A EXCEL")
+print("EXPORTANDO RESULTADOS A EXCEL (FORMATO DYNAMO)")
 print("=" * 60)
 
 try:
     import pandas as pd
-    from datetime import datetime
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils.dataframe import dataframe_to_rows
 
-    # Crear lista de resultados para DataFrame
-    datos_excel = []
+    familia_id = int(familia_seleccionada)
 
+    # ========================================================================
+    # HOJA 1: RESUMEN (una fila por ejemplar con dimensiones del bbox)
+    # ========================================================================
+    resumen_data = []
     for ejemplar, datos in resultados_ejemplares.items():
         bb_info = datos['bb_info']
-        cara = datos['cara_exterior']
-        plano_info = datos['plano_info']
-        separacion_info = datos['separacion_info']
+        centro_bb = bb_info['centro']
+        volumen = bb_info['volumen']
 
-        # Preparar datos del ejemplar
-        fila = {
-            'Familia': int(familia_seleccionada),
+        resumen_data.append({
             'Ejemplar': int(ejemplar),
-            'Puntos_Originales': len(datos['puntos_originales']),
-            'Puntos_Limpios': len(datos['puntos_limpios']),
-            'Puntos_Antena': len(datos['puntos_para_bbox']),
-        }
+            'Familia': familia_id,
+            'Volumen_BB_m3': round(volumen, 4),
+            'Centro_BB_X': round(centro_bb[0], 4),
+            'Centro_BB_Y': round(centro_bb[1], 4),
+            'Centro_BB_Z': round(centro_bb[2], 4),
+            'Dim_Eje1_m': round(bb_info['dimensiones'][0], 4),
+            'Dim_Eje2_m': round(bb_info['dimensiones'][1], 4),
+            'Dim_Eje3_m': round(bb_info['dimensiones'][2], 4)
+        })
 
-        # Información de separación
-        if separacion_info:
-            fila['Puntos_Soporte'] = len(separacion_info['puntos_soporte'])
-            fila['Porcentaje_Soporte'] = 100 * len(separacion_info['puntos_soporte']) / len(datos['puntos_limpios'])
-            fila['Distancia_Corte_m'] = separacion_info['distancia_corte']
-        else:
-            fila['Puntos_Soporte'] = 0
-            fila['Porcentaje_Soporte'] = 0
-            fila['Distancia_Corte_m'] = None
+    df_resumen = pd.DataFrame(resumen_data)
 
-        # Dimensiones del Bounding Box
-        fila['BB_Dim_X_m'] = bb_info['dimensiones'][0]
-        fila['BB_Dim_Y_m'] = bb_info['dimensiones'][1]
-        fila['BB_Dim_Z_m'] = bb_info['dimensiones'][2]
-        fila['BB_Volumen_m3'] = bb_info['volumen']
-        fila['BB_Puntos_Fuera'] = bb_info['puntos_fuera']
-        fila['BB_Metodo'] = bb_info['metodo']
+    # ========================================================================
+    # HOJA 2: VÉRTICES BB (8 vértices por cada bbox)
+    # ========================================================================
+    vertices_bb_data = []
+    for ejemplar, datos in resultados_ejemplares.items():
+        vertices = datos['vertices']  # 8 vértices del bbox
+        for i, vertice in enumerate(vertices):
+            vertices_bb_data.append({
+                'Ejemplar': int(ejemplar),
+                'Vertice_ID': i,
+                'X': round(vertice[0], 4),
+                'Y': round(vertice[1], 4),
+                'Z': round(vertice[2], 4)
+            })
 
-        # Centro del Bounding Box
-        fila['BB_Centro_X'] = bb_info['centro'][0]
-        fila['BB_Centro_Y'] = bb_info['centro'][1]
-        fila['BB_Centro_Z'] = bb_info['centro'][2]
+    df_vertices_bb = pd.DataFrame(vertices_bb_data)
 
-        # Plano de mejor ajuste (PCA)
-        fila['Plano_Normal_X'] = plano_info['normal'][0]
-        fila['Plano_Normal_Y'] = plano_info['normal'][1]
-        fila['Plano_Normal_Z'] = plano_info['normal'][2]
-        fila['Plano_Eigenvalue_Max'] = plano_info['eigenvalues'][0]
-        fila['Plano_Eigenvalue_Med'] = plano_info['eigenvalues'][1]
-        fila['Plano_Eigenvalue_Min'] = plano_info['eigenvalues'][2]
+    # ========================================================================
+    # HOJA 3: CARAS EXTERIORES (una fila por ejemplar)
+    # ========================================================================
+    caras_data = []
+    for ejemplar, datos in resultados_ejemplares.items():
+        cara = datos['cara_exterior']
+        centro = cara['centro_global']
+        normal = cara['normal_global']
 
-        # Cara exterior
-        fila['Cara_Exterior_Nombre'] = cara['nombre']
-        fila['Cara_Normal_X'] = cara['normal_global'][0]
-        fila['Cara_Normal_Y'] = cara['normal_global'][1]
-        fila['Cara_Normal_Z'] = cara['normal_global'][2]
-        fila['Cara_Centro_X'] = cara['centro_global'][0]
-        fila['Cara_Centro_Y'] = cara['centro_global'][1]
-        fila['Cara_Centro_Z'] = cara['centro_global'][2]
-        fila['Cara_Area_m2'] = cara['area']
-        fila['Cara_Puntos_Cercanos'] = cara['puntos_cercanos']
-        fila['Cara_Dist_Punto_Eje_m'] = cara['distancia_punto_eje']
+        caras_data.append({
+            'Ejemplar': int(ejemplar),
+            'Centro_X': round(centro[0], 4),
+            'Centro_Y': round(centro[1], 4),
+            'Centro_Z': round(centro[2], 4),
+            'Normal_X': round(normal[0], 4),
+            'Normal_Y': round(normal[1], 4),
+            'Normal_Z': round(normal[2], 4),
+            'Area_m2': round(cara['area'], 4)
+        })
 
-        datos_excel.append(fila)
+    df_caras = pd.DataFrame(caras_data)
 
-    # Crear DataFrame
-    df_resultados = pd.DataFrame(datos_excel)
+    # ========================================================================
+    # HOJA 4: VÉRTICES CARA EXTERIOR (4 vértices por cada cara exterior)
+    # ========================================================================
+    vertices_cara_data = []
+    for ejemplar, datos in resultados_ejemplares.items():
+        cara = datos['cara_exterior']
+        vertices_cara = cara['vertices_cara']  # 4 vértices de la cara exterior
+        for i, vertice in enumerate(vertices_cara):
+            vertices_cara_data.append({
+                'Ejemplar': int(ejemplar),
+                'Vertice_ID': i,
+                'X': round(vertice[0], 4),
+                'Y': round(vertice[1], 4),
+                'Z': round(vertice[2], 4)
+            })
 
-    # Generar nombre de archivo con timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"resultados_familia_{int(familia_seleccionada)}_{timestamp}.xlsx"
+    df_vertices_cara = pd.DataFrame(vertices_cara_data)
 
-    # Exportar a Excel con formato
-    with pd.ExcelWriter(nombre_archivo, engine='openpyxl') as writer:
-        # Hoja principal con todos los resultados
-        df_resultados.to_excel(writer, sheet_name='Resultados', index=False)
+    # ========================================================================
+    # CREAR ARCHIVO EXCEL CON LAS 4 HOJAS
+    # ========================================================================
+    nombre_archivo = f"Familia_{familia_id}_Resultados.xlsx"
+
+    # Función auxiliar para formatear hojas
+    def formatear_hoja(ws, df, titulo):
+        """Formatea una hoja de Excel con estilo"""
+        # Añadir título
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(df.columns))
+        cell_titulo = ws.cell(row=1, column=1)
+        cell_titulo.value = titulo
+        cell_titulo.font = Font(size=14, bold=True, color="FFFFFF")
+        cell_titulo.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        cell_titulo.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Añadir encabezados y datos
+        for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), start=2):
+            for c_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.value = value
+
+                # Formatear encabezado
+                if r_idx == 2:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
 
         # Ajustar anchos de columna
-        worksheet = writer.sheets['Resultados']
-        for column in worksheet.columns:
+        for column in ws.columns:
             max_length = 0
             column_letter = column[0].column_letter
             for cell in column:
@@ -1136,51 +1172,37 @@ try:
                         max_length = len(str(cell.value))
                 except:
                     pass
-            adjusted_width = min(max_length + 2, 50)
-            worksheet.column_dimensions[column_letter].width = adjusted_width
+            adjusted_width = min(max_length + 2, 40)
+            ws.column_dimensions[column_letter].width = adjusted_width
 
-        # Crear hoja de resumen
-        resumen_data = {
-            'Métrica': [
-                'Familia',
-                'Número de ejemplares',
-                'Total puntos originales',
-                'Total puntos tras limpieza',
-                'Total puntos antena',
-                'Total puntos soporte',
-                'Porcentaje medio soporte eliminado (%)',
-                'Método OBB',
-                'Volumen medio bounding box (m³)',
-                'Dimensión X media (m)',
-                'Dimensión Y media (m)',
-                'Dimensión Z media (m)'
-            ],
-            'Valor': [
-                int(familia_seleccionada),
-                len(resultados_ejemplares),
-                df_resultados['Puntos_Originales'].sum(),
-                df_resultados['Puntos_Limpios'].sum(),
-                df_resultados['Puntos_Antena'].sum(),
-                df_resultados['Puntos_Soporte'].sum(),
-                df_resultados['Porcentaje_Soporte'].mean(),
-                METODO_OBB,
-                df_resultados['BB_Volumen_m3'].mean(),
-                df_resultados['BB_Dim_X_m'].mean(),
-                df_resultados['BB_Dim_Y_m'].mean(),
-                df_resultados['BB_Dim_Z_m'].mean()
-            ]
-        }
-        df_resumen = pd.DataFrame(resumen_data)
-        df_resumen.to_excel(writer, sheet_name='Resumen', index=False)
+    # Crear workbook y hojas
+    wb = Workbook()
+    wb.remove(wb.active)  # Eliminar hoja predeterminada
 
-        # Ajustar anchos en hoja resumen
-        worksheet_resumen = writer.sheets['Resumen']
-        worksheet_resumen.column_dimensions['A'].width = 40
-        worksheet_resumen.column_dimensions['B'].width = 25
+    # Hoja 1: Resumen
+    ws_resumen = wb.create_sheet("Resumen")
+    formatear_hoja(ws_resumen, df_resumen, "Resumen")
+
+    # Hoja 2: Vértices BB
+    ws_vertices_bb = wb.create_sheet("Vertices_BB")
+    formatear_hoja(ws_vertices_bb, df_vertices_bb, "Vértices Bounding Box")
+
+    # Hoja 3: Caras Exteriores
+    ws_caras = wb.create_sheet("Caras_Exteriores")
+    formatear_hoja(ws_caras, df_caras, "Caras Exteriores")
+
+    # Hoja 4: Vértices Cara Exterior
+    ws_vertices_cara = wb.create_sheet("Vertices_Cara_Exterior")
+    formatear_hoja(ws_vertices_cara, df_vertices_cara, "Vértices Cara Exterior")
+
+    # Guardar archivo
+    wb.save(nombre_archivo)
 
     print(f"✓ Resultados exportados a: {nombre_archivo}")
-    print(f"  - Hoja 'Resultados': {len(df_resultados)} ejemplares con {len(df_resultados.columns)} columnas")
-    print(f"  - Hoja 'Resumen': Estadísticas globales de la familia")
+    print(f"  - Hoja 'Resumen': {len(df_resumen)} ejemplares")
+    print(f"  - Hoja 'Vertices_BB': {len(df_vertices_bb)} vértices")
+    print(f"  - Hoja 'Caras_Exteriores': {len(df_caras)} caras")
+    print(f"  - Hoja 'Vertices_Cara_Exterior': {len(df_vertices_cara)} vértices")
 
 except ImportError:
     print("⚠️ pandas u openpyxl no están instalados. Instalar con:")
