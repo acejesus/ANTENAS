@@ -372,12 +372,16 @@ def separar_antena_soporte(puntos, plano_info, densidad_info,
         raise ValueError(f"Método '{metodo}' no reconocido")
 
     # Aplicar corte
+    # El punto de corte detectado marca dónde EMPIEZA el soporte
+    # Por tanto, la antena está desde -infinito hasta el punto de corte
     if lado_antena == 'positivo':
-        # Antena en lado positivo: mantener puntos con distancia >= 0 y <= distancia_corte
-        mask_antena = (distancias >= 0) & (distancias <= abs(distancia_corte))
+        # Soporte está en distancias > distancia_corte
+        # Antena está en distancias <= distancia_corte (desde -inf hasta corte)
+        mask_antena = distancias <= abs(distancia_corte)
     else:
-        # Antena en lado negativo: mantener puntos con distancia <= 0 y >= distancia_corte
-        mask_antena = (distancias <= 0) & (distancias >= -abs(distancia_corte))
+        # Soporte está en distancias < distancia_corte (negativos más alejados)
+        # Antena está en distancias >= -abs(distancia_corte) (desde corte hasta +inf)
+        mask_antena = distancias >= -abs(distancia_corte)
 
     puntos_antena = puntos[mask_antena]
     puntos_soporte = puntos[~mask_antena]
