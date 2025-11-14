@@ -246,6 +246,89 @@ def analizar_densidad_perpendicular(puntos, plano_info, ancho_ventana=0.05,
     }
 
 
+def detectar_punto_caida_densidad(densidad_info, lado='negativo', umbral_factor=0.3):
+    """
+    Detecta dónde TERMINA la cara interna de la antena buscando donde la densidad
+    cae por debajo de un umbral basado en el máximo de densidad.
+
+    Este método es más robusto que el percentil porque:
+    - Identifica específicamente la transición desde la zona de alta densidad (antena)
+      hacia la zona de baja densidad (espacio entre antena y soportes)
+    - No asume una distribución específica de puntos
+
+    Args:
+        densidad_info: resultado de analizar_densidad_perpendicular
+        lado: 'positivo' o 'negativo' (lado del plano a analizar)
+        umbral_factor: factor para calcular umbral (default: 0.3 = 30% del máximo)
+
+    Returns:
+        dict con:
+        - distancia_corte: distancia al plano donde se detecta la caída
+        - densidad_corte: densidad en el punto de corte
+        - umbral_usado: umbral de densidad aplicado
+        - max_densidad: densidad máxima encontrada
+        None si no se detecta
+    """
+    distancias = densidad_info['distancias']
+    densidades = densidad_info['densidades']
+
+    # Filtrar por lado
+    if lado == 'positivo':
+        mask = distancias > 0
+    else:
+        mask = distancias < 0
+
+    dist_lado = distancias[mask]
+    dens_lado = densidades[mask]
+
+    if len(dens_lado) < 3:
+        print(f"    ⚠️ Insuficientes puntos en lado {lado} para detectar caída de densidad")
+        return None
+
+    # Encontrar máximo de densidad en este lado
+    max_densidad = np.max(dens_lado)
+    umbral_densidad = umbral_factor * max_densidad
+
+    print(f"    Análisis de caída de densidad en lado {lado}:")
+    print(f"    - Densidad máxima: {max_densidad:.2f} puntos/m³")
+    print(f"    - Umbral ({umbral_factor*100:.0f}%): {umbral_densidad:.2f} puntos/m³")
+
+    # Buscar primer punto donde densidad cae por debajo del umbral
+    # Empezar desde el plano (distancia ~0) y moverse hacia el interior
+    if lado == 'negativo':
+        # Ordenar de menos negativo (cerca del plano) a más negativo (hacia torre)
+        indices_ordenados = np.argsort(dist_lado)[::-1]  # Descendente
+    else:
+        # Ordenar de menos positivo (cerca del plano) a más positivo (hacia fuera)
+        indices_ordenados = np.argsort(dist_lado)
+
+    dist_ordenado = dist_lado[indices_ordenados]
+    dens_ordenado = dens_lado[indices_ordenados]
+
+    # Buscar el primer punto donde la densidad cae por debajo del umbral
+    indices_debajo = np.where(dens_ordenado < umbral_densidad)[0]
+
+    if len(indices_debajo) > 0:
+        idx_corte = indices_debajo[0]
+        distancia_corte = dist_ordenado[idx_corte]
+        densidad_corte = dens_ordenado[idx_corte]
+
+        print(f"    ✓ Caída de densidad detectada:")
+        print(f"      - Distancia al plano: {distancia_corte:.3f} m")
+        print(f"      - Densidad en corte: {densidad_corte:.2f} puntos/m³")
+
+        return {
+            'distancia_corte': distancia_corte,
+            'densidad_corte': densidad_corte,
+            'umbral_usado': umbral_densidad,
+            'max_densidad': max_densidad
+        }
+    else:
+        print(f"    ⚠️ No se detectó caída de densidad significativa")
+        print(f"      - Todas las densidades están por encima del umbral")
+        return None
+
+
 def detectar_cambio_brusco_densidad(densidad_info, umbral_derivada=None,
                                      lado='positivo'):
     """
@@ -356,27 +439,42 @@ def separar_antena_soporte(puntos, plano_info, densidad_info,
         # Si antena está en lado negativo → soportes en lado positivo
         lado_soporte = 'negativo' if lado_antena == 'positivo' else 'positivo'
 
-        print(f"    Buscando cambio brusco en lado {lado_soporte} (soportes)")
+        print(f"    Buscando soportes en lado {lado_soporte}")
 
-        # Detectar cambio brusco en el lado donde están los SOPORTES
-        cambio_info = detectar_cambio_brusco_densidad(
+        # MÉTODO 1 (NUEVO): Detectar caída de densidad en cara interna
+        print(f"\n    [Método 1] Detección por caída de densidad:")
+        caida_info = detectar_punto_caida_densidad(
             densidad_info,
-            lado=lado_soporte  # ← Cambiado: buscar en lado de soportes, no de antena
+            lado=lado_soporte,
+            umbral_factor=0.3  # 30% del máximo
         )
 
-        if cambio_info is not None:
-            distancia_corte = cambio_info['distancia_corte']
+        if caida_info is not None:
+            distancia_corte = caida_info['distancia_corte']
+            print(f"    ✓ Usando corte por caída de densidad: {distancia_corte:.3f} m")
         else:
-            # Fallback: usar un percentil conservador EN EL LADO DE LOS SOPORTES
-            if lado_antena == 'positivo':
-                # Antena en lado positivo → soportes en lado negativo
-                # Usar percentil 25 de los negativos (los más cercanos al plano)
-                distancia_corte = np.percentile(distancias[distancias < 0], 25)
+            # MÉTODO 2: Detectar cambio brusco con derivada
+            print(f"\n    [Método 2] Detección por derivada (fallback):")
+            cambio_info = detectar_cambio_brusco_densidad(
+                densidad_info,
+                lado=lado_soporte
+            )
+
+            if cambio_info is not None:
+                distancia_corte = cambio_info['distancia_corte']
+                print(f"    ✓ Usando corte por derivada: {distancia_corte:.3f} m")
             else:
-                # Antena en lado negativo → soportes en lado positivo
-                # Usar percentil 75 de los positivos (los más cercanos al plano)
-                distancia_corte = np.percentile(distancias[distancias > 0], 75)
-            print(f"    ℹ️ Usando corte por percentil en lado soportes: {distancia_corte:.3f} m")
+                # MÉTODO 3: Fallback final con percentil
+                print(f"\n    [Método 3] Percentil (fallback final):")
+                if lado_antena == 'positivo':
+                    # Antena en lado positivo → soportes en lado negativo
+                    # Usar percentil 25 de los negativos (los más cercanos al plano)
+                    distancia_corte = np.percentile(distancias[distancias < 0], 25)
+                else:
+                    # Antena en lado negativo → soportes en lado positivo
+                    # Usar percentil 75 de los positivos (los más cercanos al plano)
+                    distancia_corte = np.percentile(distancias[distancias > 0], 75)
+                print(f"    ℹ️ Usando corte por percentil: {distancia_corte:.3f} m")
 
     elif metodo == 'umbral_fijo':
         # Usar umbral fijo en el lado de los SOPORTES
@@ -888,6 +986,157 @@ print("\n" + "=" * 60)
 print("PROCESAMIENTO COMPLETADO")
 print("=" * 60)
 print(f"\n✓ {len(resultados_ejemplares)} ejemplares procesados")
+
+
+# ============================================================================
+# EXPORTAR RESULTADOS A EXCEL
+# ============================================================================
+
+print("\n" + "=" * 60)
+print("EXPORTANDO RESULTADOS A EXCEL")
+print("=" * 60)
+
+try:
+    import pandas as pd
+    from datetime import datetime
+
+    # Crear lista de resultados para DataFrame
+    datos_excel = []
+
+    for ejemplar, datos in resultados_ejemplares.items():
+        bb_info = datos['bb_info']
+        cara = datos['cara_exterior']
+        plano_info = datos['plano_info']
+        separacion_info = datos['separacion_info']
+
+        # Preparar datos del ejemplar
+        fila = {
+            'Familia': int(familia_seleccionada),
+            'Ejemplar': int(ejemplar),
+            'Puntos_Originales': len(datos['puntos_originales']),
+            'Puntos_Limpios': len(datos['puntos_limpios']),
+            'Puntos_Antena': len(datos['puntos_para_bbox']),
+        }
+
+        # Información de separación
+        if separacion_info:
+            fila['Puntos_Soporte'] = len(separacion_info['puntos_soporte'])
+            fila['Porcentaje_Soporte'] = 100 * len(separacion_info['puntos_soporte']) / len(datos['puntos_limpios'])
+            fila['Distancia_Corte_m'] = separacion_info['distancia_corte']
+        else:
+            fila['Puntos_Soporte'] = 0
+            fila['Porcentaje_Soporte'] = 0
+            fila['Distancia_Corte_m'] = None
+
+        # Dimensiones del Bounding Box
+        fila['BB_Dim_X_m'] = bb_info['dimensiones'][0]
+        fila['BB_Dim_Y_m'] = bb_info['dimensiones'][1]
+        fila['BB_Dim_Z_m'] = bb_info['dimensiones'][2]
+        fila['BB_Volumen_m3'] = bb_info['volumen']
+        fila['BB_Puntos_Fuera'] = bb_info['puntos_fuera']
+        fila['BB_Metodo'] = bb_info['metodo']
+
+        # Centro del Bounding Box
+        fila['BB_Centro_X'] = bb_info['centro'][0]
+        fila['BB_Centro_Y'] = bb_info['centro'][1]
+        fila['BB_Centro_Z'] = bb_info['centro'][2]
+
+        # Plano de mejor ajuste (PCA)
+        fila['Plano_Normal_X'] = plano_info['normal'][0]
+        fila['Plano_Normal_Y'] = plano_info['normal'][1]
+        fila['Plano_Normal_Z'] = plano_info['normal'][2]
+        fila['Plano_Eigenvalue_Max'] = plano_info['eigenvalues'][0]
+        fila['Plano_Eigenvalue_Med'] = plano_info['eigenvalues'][1]
+        fila['Plano_Eigenvalue_Min'] = plano_info['eigenvalues'][2]
+
+        # Cara exterior
+        fila['Cara_Exterior_Nombre'] = cara['nombre']
+        fila['Cara_Normal_X'] = cara['normal_global'][0]
+        fila['Cara_Normal_Y'] = cara['normal_global'][1]
+        fila['Cara_Normal_Z'] = cara['normal_global'][2]
+        fila['Cara_Centro_X'] = cara['centro_global'][0]
+        fila['Cara_Centro_Y'] = cara['centro_global'][1]
+        fila['Cara_Centro_Z'] = cara['centro_global'][2]
+        fila['Cara_Area_m2'] = cara['area']
+        fila['Cara_Puntos_Cercanos'] = cara['puntos_cercanos']
+        fila['Cara_Dist_Punto_Eje_m'] = cara['distancia_punto_eje']
+
+        datos_excel.append(fila)
+
+    # Crear DataFrame
+    df_resultados = pd.DataFrame(datos_excel)
+
+    # Generar nombre de archivo con timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_archivo = f"resultados_familia_{int(familia_seleccionada)}_{timestamp}.xlsx"
+
+    # Exportar a Excel con formato
+    with pd.ExcelWriter(nombre_archivo, engine='openpyxl') as writer:
+        # Hoja principal con todos los resultados
+        df_resultados.to_excel(writer, sheet_name='Resultados', index=False)
+
+        # Ajustar anchos de columna
+        worksheet = writer.sheets['Resultados']
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+
+        # Crear hoja de resumen
+        resumen_data = {
+            'Métrica': [
+                'Familia',
+                'Número de ejemplares',
+                'Total puntos originales',
+                'Total puntos tras limpieza',
+                'Total puntos antena',
+                'Total puntos soporte',
+                'Porcentaje medio soporte eliminado (%)',
+                'Método OBB',
+                'Volumen medio bounding box (m³)',
+                'Dimensión X media (m)',
+                'Dimensión Y media (m)',
+                'Dimensión Z media (m)'
+            ],
+            'Valor': [
+                int(familia_seleccionada),
+                len(resultados_ejemplares),
+                df_resultados['Puntos_Originales'].sum(),
+                df_resultados['Puntos_Limpios'].sum(),
+                df_resultados['Puntos_Antena'].sum(),
+                df_resultados['Puntos_Soporte'].sum(),
+                df_resultados['Porcentaje_Soporte'].mean(),
+                METODO_OBB,
+                df_resultados['BB_Volumen_m3'].mean(),
+                df_resultados['BB_Dim_X_m'].mean(),
+                df_resultados['BB_Dim_Y_m'].mean(),
+                df_resultados['BB_Dim_Z_m'].mean()
+            ]
+        }
+        df_resumen = pd.DataFrame(resumen_data)
+        df_resumen.to_excel(writer, sheet_name='Resumen', index=False)
+
+        # Ajustar anchos en hoja resumen
+        worksheet_resumen = writer.sheets['Resumen']
+        worksheet_resumen.column_dimensions['A'].width = 40
+        worksheet_resumen.column_dimensions['B'].width = 25
+
+    print(f"✓ Resultados exportados a: {nombre_archivo}")
+    print(f"  - Hoja 'Resultados': {len(df_resultados)} ejemplares con {len(df_resultados.columns)} columnas")
+    print(f"  - Hoja 'Resumen': Estadísticas globales de la familia")
+
+except ImportError:
+    print("⚠️ pandas u openpyxl no están instalados. Instalar con:")
+    print("   pip install pandas openpyxl")
+except Exception as e:
+    print(f"⚠️ Error al exportar a Excel: {e}")
 
 
 # ============================================================================
