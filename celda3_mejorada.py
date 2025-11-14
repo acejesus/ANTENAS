@@ -943,9 +943,30 @@ for ejemplar in ejemplares:
         puntos_para_bbox = separacion_info['puntos_antena']
 
         print(f"\n  ✓ Usando {len(puntos_para_bbox)} puntos para calcular bbox final")
+
+        # NUEVO: Re-calcular plano con puntos limpios para verificar orientación
+        print("\n  [VERIFICACIÓN] Re-ajuste de plano con puntos limpios:")
+        plano_limpio = ajustar_plano_bestfit(puntos_para_bbox)
+
+        # Comparar con plano original
+        angulo_planos = np.arccos(np.clip(np.abs(np.dot(plano_info['normal'],
+                                                         plano_limpio['normal'])),
+                                          0, 1)) * 180 / np.pi
+        print(f"    - Diferencia angular entre planos: {angulo_planos:.2f}°")
+
+        if angulo_planos > 15:
+            print(f"    ⚠️ Gran diferencia angular ({angulo_planos:.2f}°)")
+            print(f"    - Plano original afectado por soportes")
+            print(f"    - El plano limpio será usado para validación de bbox")
+
+        # Guardar ambos planos
+        plano_info_original = plano_info.copy()
+        plano_info_verificacion = plano_limpio
     else:
         puntos_para_bbox = puntos_limpios
         separacion_info = None
+        plano_info_verificacion = None
+        plano_info_original = plano_info
         print("\n  ℹ️ Separación antena/soporte desactivada")
 
     # 5. Calcular bounding box (con método seleccionado)
@@ -969,11 +990,40 @@ for ejemplar in ejemplares:
           f"{cara_exterior['normal_global'][1]:.3f}, "
           f"{cara_exterior['normal_global'][2]:.3f})")
 
+    # VALIDACIÓN: Comparar normal de cara exterior con plano de puntos limpios
+    if APLICAR_SEPARACION and plano_info_verificacion is not None:
+        print("\n  [VALIDACIÓN] Coherencia entre bbox y plano limpio:")
+        normal_cara = cara_exterior['normal_global']
+        normal_plano = plano_info_verificacion['normal']
+
+        angulo_validacion = np.arccos(np.clip(np.abs(np.dot(normal_cara, normal_plano)),
+                                               0, 1)) * 180 / np.pi
+
+        print(f"    - Normal cara exterior: ({normal_cara[0]:.3f}, "
+              f"{normal_cara[1]:.3f}, {normal_cara[2]:.3f})")
+        print(f"    - Normal plano limpio: ({normal_plano[0]:.3f}, "
+              f"{normal_plano[1]:.3f}, {normal_plano[2]:.3f})")
+        print(f"    - Diferencia angular: {angulo_validacion:.2f}°")
+
+        if angulo_validacion < 10:
+            print(f"    ✓ Excelente alineación (< 10°)")
+        elif angulo_validacion < 20:
+            print(f"    ✓ Buena alineación (< 20°)")
+        elif angulo_validacion < 30:
+            print(f"    ⚠️ Alineación moderada (< 30°)")
+        else:
+            print(f"    ⚠️ ADVERTENCIA: Pobre alineación (> 30°)")
+            print(f"    - La bbox puede no estar bien orientada")
+            print(f"    - Considerar usar el plano limpio para re-orientar la bbox")
+
     # Guardar resultados
     resultados_ejemplares[ejemplar] = {
         'puntos_originales': puntos,
         'puntos_limpios': puntos_limpios,
         'plano_info': plano_info,
+        'plano_info_verificacion': plano_info_verificacion if APLICAR_SEPARACION else None,
+        'angulo_planos': angulo_planos if APLICAR_SEPARACION else None,
+        'angulo_validacion_bbox': angulo_validacion if (APLICAR_SEPARACION and plano_info_verificacion is not None) else None,
         'densidad_info': densidad_info if APLICAR_SEPARACION else None,
         'separacion_info': separacion_info,
         'puntos_para_bbox': puntos_para_bbox,
